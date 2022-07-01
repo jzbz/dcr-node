@@ -30,6 +30,7 @@ cat > /etc/init.d/dcrd <<EOF
 name="dcrd"
 command="dcrd"
 command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
 EOF
 
 chmod +x /etc/init.d/dcrd
