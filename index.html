@@ -56,7 +56,7 @@ systemctl restart dcrd
 cat > /usr/local/bin/decred.sh <<EOF
 printf "${l} \n\n"
 
-tail -f /root/.dcrd/logs/mainnet/dcrd.log
+sudo tail -f /root/.dcrd/logs/mainnet/dcrd.log
 EOF
 
 chmod +x /usr/local/bin/decred.sh
