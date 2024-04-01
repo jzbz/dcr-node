@@ -24,6 +24,10 @@ fi
 if [ "$arch" == 'aarch64' ]; then
     a=arm64
 fi
+
+if [ "$arch" == 'armv7l' ]; then
+    a=arm
+fi
 v=v1.8.1
 b=decred-linux-${a}-${v}.tar.gz
 l=$(exec base64 -d <<<"H4sIAAAAAAAAA52Tu24DIRBF+/2K6SiCx3IXQeQmKVNEVrpVigiQbQkZa8EOnx/zWvalJM6tFgRn
