@@ -1,0 +1,64 @@
+#!/bin/bash
+
+# Set up a Decred node.
+#
+# Debian or Ubuntu on a Raspberry Pi 4/5 (ARM64) recommended.
+#
+# To use run:
+# curl -L https://node.dcr.pw/pi | bash
+#
+# Check it's running with:
+# systemctl status dcrd
+# Or run decred.sh to view the output of dcrd.log in real-time.
+
+# Get permissions.
+sudo bash
+
+# Set Decred version, CPU architecture, binaries archive name, logo.
+v=v1.8.1
+a=arm64
+b=decred-linux-${a}-${v}.tar.gz
+l=$(exec base64 -d <<<"H4sIAAAAAAAAA52Tu24DIRBF+/2K6SiCx3IXQeQmKVNEVrpVigiQbQkZa8EOnx/zWvalJM6tFgRn
+7t4ZGuiFRf0GrUKYaPUHNQM4ZyKIFxDRssrU/agWXpTolISTkQqs+3QXO6n/0YyWSBOfkcIXFe+9
+FJXfghSdhOsGH3Ez/a1FeMBlfAkC41qbjOcV/qtmcKScJfwkhpiR977QWzg4d7ZsvZYxHjTd/kc4
+ElY0TieKJe//dH7raBSnlGQNzWNKHgt8BbvLCbJvewBn4HpUX7EXqM1+BEfOA30+dVm5t73zFbx1
+ylp4en7fvW7h4faxDRWUP7qZc8qD6DIZuUnsmvldsST4MGbMrc3DEqa9r33nIyIRPp4Rqk1WQGs+
+bFEyw8l4qEQ+rykOD2d4iGZwB3nia4aTB1fPxzulRvEjcPaGEAlduJENSUGabzs2nP+OBAAA" | gunzip)
+
+# Show logo
+printf "$l \n\n"
+
+# Download Decred binaries archive.
+curl -L -O https://github.com/decred/decred-binaries/releases/download/${v}/${b}
+
+# Extract Decred binaries.
+tar -xf ${b} --strip-components 1 -C /usr/local/bin/
+
+# Create dcrd service.
+cat > /etc/systemd/system/dcrd.service <<EOF
+[Unit]
+Description=dcrd
+
+[Service]
+Type=simple
+ExecStart=dcrd
+Restart=on-abnormal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable + (re)start service.
+systemctl enable dcrd
+systemctl restart dcrd
+
+# Create status script.
+cat > /usr/local/bin/decred.sh <<EOF
+printf "${l} \n\n"
+
+sudo tail -f /root/.dcrd/logs/mainnet/dcrd.log
+EOF
+
+chmod +x /usr/local/bin/decred.sh
+
+printf "\n**********\nInstallation complete, enjoy your new Decred node! \nYou can monitor its status by using the decred.sh command.\n**********\n\n"
