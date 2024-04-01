@@ -14,7 +14,16 @@
 # Get permissions.
 sudo bash
 
-# Set Decred version, CPU architecture, binaries archive name, logo.
+# Set CPU architecture, Decred version, binaries archive name, logo.
+arch=$(lscpu | grep Architecture | awk {'print $2'})
+
+if [ "$arch" == 'x86_64' ]; then
+    a=amd64
+fi
+
+if [ "$arch" == 'aarch64' ]; then
+    a=arm64
+fi
 v=v1.8.1
 a=amd64
 b=decred-linux-${a}-${v}.tar.gz
