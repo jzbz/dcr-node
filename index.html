@@ -15,7 +15,7 @@
 sudo bash
 
 # Set CPU architecture, Decred version, binaries archive name, logo.
-arch=$(lscpu | grep Architecture | awk {'print $2'})
+arch=$(uname -m)
 
 if [ "$arch" == 'x86_64' ]; then
     a=amd64
