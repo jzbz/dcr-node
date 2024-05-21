@@ -1,4 +1,3 @@
-
 #!/bin/bash
 
 # Set up a Decred node.
@@ -29,14 +28,14 @@ fi
 if [ "$arch" == 'armv7l' ]; then
     a=arm
 fi
-v=v1.8.1
+v=v2.0.0
 b=decred-linux-${a}-${v}.tar.gz
-l=$(exec base64 -d <<<"H4sIAAAAAAAAA52Tu24DIRBF+/2K6SiCx3IXQeQmKVNEVrpVigiQbQkZa8EOnx/zWvalJM6tFgRn
-7t4ZGuiFRf0GrUKYaPUHNQM4ZyKIFxDRssrU/agWXpTolISTkQqs+3QXO6n/0YyWSBOfkcIXFe+9
-FJXfghSdhOsGH3Ez/a1FeMBlfAkC41qbjOcV/qtmcKScJfwkhpiR977QWzg4d7ZsvZYxHjTd/kc4
-ElY0TieKJe//dH7raBSnlGQNzWNKHgt8BbvLCbJvewBn4HpUX7EXqM1+BEfOA30+dVm5t73zFbx1
-ylp4en7fvW7h4faxDRWUP7qZc8qD6DIZuUnsmvldsST4MGbMrc3DEqa9r33nIyIRPp4Rqk1WQGs+
-bFEyw8l4qEQ+rykOD2d4iGZwB3nia4aTB1fPxzulRvEjcPaGEAlduJENSUGabzs2nP+OBAAA" | gunzip)
+l=$(exec base64 -d <<<"H4sIAAAAAAAAA52Tu24DIRBF+/2K6SiCx1ZKiNwkZYrISrdKEQGyLSFjLdjh82Ney76UxLnVguDM
+3TtDA72wqN+gVQgTrf6gZgDnTATxAiJaVpm6H9XCixKdknAyUoF1n+5iJ/U/mtESaeIzUvii4r2X
+ovJbkKKTcH3EDW6mv7UID7iML0FgXGuT8bzCf9UMjpSzhJ/EEDPy3hd6Cwfnzpat1zLGg6bb/whH
+worG6USx5P2fzm8djeKUkqyheUzJY4GvYHc5QfZtD+AMXI/qK/YCtdmP4Mh5oM+nLiv3tne+grdO
+WQtPz++71y083D62oYLyRzdzTnkQXSYjN4ldM78rlgQfxoy5tXlYwrT3te98RCTCxzNCtckKaM2H
+LUpmOBkPlcjnNcXh4QwP0QzuIE98zXDy4Or5eKfUKH4Ezt4QIqELN7IhKUjzDemql3qOBAAA" | gunzip)
 
 # Show logo
 printf "$l \n\n"
