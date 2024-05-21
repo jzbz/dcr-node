@@ -46,6 +46,9 @@ curl -L -O https://github.com/decred/decred-binaries/releases/download/${v}/${b}
 # Extract Decred binaries.
 tar -xf ${b} --strip-components 1 -C /usr/local/bin/
 
+# Stop existing dcrd instance.
+systemctl status dcrd.service >/dev/null && systemctl stop dcrd.service
+
 # Create dcrd service.
 cat > /etc/systemd/system/dcrd.service <<EOF
 [Unit]
