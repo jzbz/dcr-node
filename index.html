@@ -8,8 +8,11 @@
 # curl -L https://node.dcr.pw | bash
 #
 # Check it's running with:
-# sudo systemctl status dcrd
+# systemctl status dcrd
 # Or run decred.sh to view the output of dcrd.log in real-time.
+
+# Get permissions.
+sudo -s
 
 # Set CPU architecture, Decred version, binaries archive name, logo.
 arch=$(uname -m)
@@ -41,19 +44,19 @@ printf "$l \n\n"
 curl -L -O https://github.com/decred/decred-binaries/releases/download/${v}/${b}
 
 # Extract Decred binaries.
-sudo tar -xf ${b} --strip-components 1 -C /usr/local/bin/
+tar -xf ${b} --strip-components 1 -C /usr/local/bin/
 
 # Stop existing dcrd instance.
-sudo systemctl status dcrd.service >/dev/null && sudo systemctl stop dcrd.service
+systemctl status dcrd.service >/dev/null && systemctl stop dcrd.service
 
 # Create dcrd service.
-sudo cat > /etc/systemd/system/dcrd.service <<EOF
+cat > /etc/systemd/system/dcrd.service <<EOF
 [Unit]
 Description=dcrd
 
 [Service]
 Type=simple
-ExecStart=dcrd
+ExecStart=dcrd --appdata=/root/.dcrd
 Restart=on-abnormal
 
 [Install]
@@ -61,16 +64,16 @@ WantedBy=multi-user.target
 EOF
 
 # Enable + (re)start service.
-sudo systemctl enable dcrd
-sudo systemctl restart dcrd
+systemctl enable dcrd
+systemctl restart dcrd
 
 # Create status script.
-sudo cat > /usr/local/bin/decred.sh <<EOF
+cat > /usr/local/bin/decred.sh <<EOF
 printf "${l} \n\n"
 
 sudo tail -f /root/.dcrd/logs/mainnet/dcrd.log
 EOF
 
-sudo chmod +x /usr/local/bin/decred.sh
+chmod +x /usr/local/bin/decred.sh
 
 printf "\n**********\nInstallation complete, enjoy your new Decred node! \nYou can monitor its status by using the decred.sh command.\n**********\n\n"
