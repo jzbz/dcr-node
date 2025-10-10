@@ -91,7 +91,7 @@ fi
 log_message "Creating dcrd systemd service..."
 cat > /etc/systemd/system/dcrd.service <<EOF
 [Unit]
-Description=Decred Daemon
+Description=Decred daemon
 After=network.target
 
 [Service]
