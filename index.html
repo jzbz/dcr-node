@@ -5,7 +5,7 @@
 # curl -L https://node.dcr.pw | sudo bash
 
 # Exit immediately if a command exits with a non-zero status.
-set -e
+set -euo pipefail
 
 # --- Configuration ---
 # Use a dedicated system user and group for security.
@@ -13,6 +13,7 @@ DCR_USER="decred"
 # Store data in a standard location, not /root.
 DCR_HOME="/var/lib/decred"
 LOG_FILE="/var/log/decred_setup.log"
+TMP_DIR=""
 
 # --- Functions ---
 # Function to log messages to stdout and a log file.
@@ -20,12 +21,27 @@ log_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
 }
 
+# Function to cleanup on exit
+cleanup() {
+    if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
+        log_message "Cleaning up temporary directory..."
+        rm -rf "$TMP_DIR"
+    fi
+}
+
+# Trap to ensure cleanup on exit
+trap cleanup EXIT
+
 # --- Script Start ---
 # 1. Check for Root Permissions
 if [ "$(id -u)" -ne "0" ]; then
     echo "This script must be run as root. Please use sudo."
     exit 1
 fi
+
+# Ensure log file exists and has proper permissions
+touch "$LOG_FILE"
+chmod 644 "$LOG_FILE"
 
 log_message "Starting Decred node setup..."
 
@@ -50,8 +66,8 @@ log_message "Detected architecture: $arch ($a)"
 
 # 4. Fetch the Latest Decred Version from GitHub API
 log_message "Fetching the latest Decred version..."
-v=$(curl -s "https://api.github.com/repos/decred/decred-binaries/releases/latest" | jq -r .tag_name)
-if [ -z "$v" ]; then
+v=$(curl -sSf "https://api.github.com/repos/decred/decred-binaries/releases/latest" | jq -r .tag_name)
+if [ -z "$v" ] || [ "$v" = "null" ]; then
     log_message "Error: Could not fetch the latest version tag from GitHub."
     exit 1
 fi
@@ -60,23 +76,60 @@ log_message "Latest version is $v"
 # 5. Download and Extract Decred Binaries
 b="decred-linux-${a}-${v}.tar.gz"
 download_url="https://github.com/decred/decred-binaries/releases/download/${v}/${b}"
+manifest_url="https://github.com/decred/decred-binaries/releases/download/${v}/manifest-${v}.txt"
+
+# Create temporary directory
+TMP_DIR=$(mktemp -d)
+log_message "Using temporary directory: $TMP_DIR"
 
 log_message "Downloading $b..."
-curl -L -o "$b" "$download_url"
+if ! curl -sSfL -o "${TMP_DIR}/${b}" "$download_url"; then
+    log_message "Error: Failed to download binaries from $download_url"
+    exit 1
+fi
+
+log_message "Downloading manifest for checksum verification..."
+if curl -sSfL -o "${TMP_DIR}/manifest.txt" "$manifest_url"; then
+    log_message "Verifying checksum..."
+    cd "$TMP_DIR"
+    if grep "$b" manifest.txt | sha256sum -c --status; then
+        log_message "Checksum verification passed."
+    else
+        log_message "Warning: Checksum verification failed or not found in manifest."
+    fi
+    cd - > /dev/null
+else
+    log_message "Warning: Could not download manifest file. Skipping checksum verification."
+fi
 
 log_message "Extracting binaries to /usr/local/bin/..."
-# Extract directly into the destination, stripping the top-level directory.
-tar -xf "$b" --strip-components=1 -C /usr/local/bin/
+# Extract to temp directory first, then move specific binaries
+tar -xzf "${TMP_DIR}/${b}" -C "$TMP_DIR"
+
+# Find and copy the dcrd binary (and other binaries if needed)
+find "$TMP_DIR" -name "dcrd" -type f -executable -exec cp {} /usr/local/bin/ \;
+find "$TMP_DIR" -name "dcrctl" -type f -executable -exec cp {} /usr/local/bin/ \;
+find "$TMP_DIR" -name "dcrwallet" -type f -executable -exec cp {} /usr/local/bin/ \;
+
+# Verify dcrd was installed
+if [ ! -x "/usr/local/bin/dcrd" ]; then
+    log_message "Error: dcrd binary not found after extraction."
+    exit 1
+fi
+
+chmod +x /usr/local/bin/dcrd /usr/local/bin/dcrctl /usr/local/bin/dcrwallet 2>/dev/null || true
+log_message "Binaries installed successfully."
 
 # 6. Create Dedicated User and Data Directory
 if ! id -u "$DCR_USER" >/dev/null 2>&1; then
     log_message "Creating system user '$DCR_USER'..."
-    useradd -r -m -d "$DCR_HOME" -s /bin/bash "$DCR_USER"
+    useradd -r -m -d "$DCR_HOME" -s /usr/sbin/nologin "$DCR_USER"
 else
     log_message "User '$DCR_USER' already exists."
 fi
 # Ensure the home directory exists and has correct permissions.
 mkdir -p "$DCR_HOME"
+mkdir -p "$DCR_HOME/logs/mainnet"
 chown -R "${DCR_USER}:${DCR_USER}" "$DCR_HOME"
 chmod 700 "$DCR_HOME"
 log_message "Data directory configured at $DCR_HOME"
@@ -115,6 +168,15 @@ systemctl daemon-reload
 systemctl enable dcrd.service
 systemctl start dcrd.service
 
+# Wait a moment and verify the service started successfully
+sleep 2
+if systemctl is-active --quiet dcrd.service; then
+    log_message "dcrd service started successfully."
+else
+    log_message "Warning: dcrd service may not have started correctly."
+    log_message "Check status with: systemctl status dcrd"
+fi
+
 # 10. Create Status Helper Script
 log_message "Creating status script at /usr/local/bin/decred.sh..."
 
@@ -136,23 +198,22 @@ ART
 
 # --- Dynamic Version Line ---
 # This line reads the version that was embedded during installation.
-printf " d c r d   n o d e   %s\n" "$v"
+printf " d c r d   n o d e   ${v}\n"
 echo   "============================="
 echo   "" # Adds a blank line for spacing
 
 # --- Log Tailing ---
 # Follow the log file from the correct data directory.
-tail -f "$DCR_HOME/logs/mainnet/dcrd.log"
+tail -f "${DCR_HOME}/logs/mainnet/dcrd.log"
 EOF
 
 # Make the new script executable
 chmod +x /usr/local/bin/decred.sh
 
-# 11. Cleanup
-log_message "Cleaning up temporary files..."
-rm -f "$b"
-
+# 11. Final Status
 log_message "Installation complete."
 printf "\n✅ Installation complete! Your Decred node is running.\n"
 printf "   - To check the status: systemctl status dcrd\n"
-printf "   - To monitor the log in real-time: decred.sh\n\n"
+printf "   - To monitor the log in real-time: decred.sh\n"
+printf "   - To view logs: journalctl -u dcrd -f\n"
+printf "   - Binaries installed: dcrd, dcrctl, dcrwallet\n\n"
