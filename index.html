@@ -1,27 +1,30 @@
 #!/bin/bash
-# A script to install and set up a Decred node as a systemd service.
+# Decred Node Installation Script
+# Installs and configures a Decred node as a systemd service.
 #
-# To install, download and run this script from your server's terminal:
-# curl -L https://node.dcr.pw | sudo bash
+# Usage:
+#   curl -L https://node.dcr.pw | sudo bash
 
 # Exit immediately if a command exits with a non-zero status.
 set -euo pipefail
 
 # --- Configuration ---
-# Use a dedicated system user and group for security.
+# Dedicated system user for running the Decred daemon.
 DCR_USER="decred"
-# Store data in a standard location, not /root.
+# Data directory for blockchain and configuration files.
 DCR_HOME="/var/lib/decred"
+# Installation log file location.
 LOG_FILE="/var/log/decred_setup.log"
+# Temporary directory for downloads (set during execution).
 TMP_DIR=""
 
 # --- Functions ---
-# Function to log messages to stdout and a log file.
+# Log messages to both stdout and log file with timestamp.
 log_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
 }
 
-# Function to cleanup on exit
+# Clean up temporary directory on script exit.
 cleanup() {
     if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
         log_message "Cleaning up temporary directory..."
@@ -29,7 +32,7 @@ cleanup() {
     fi
 }
 
-# Trap to ensure cleanup on exit
+# Register cleanup function to run on exit.
 trap cleanup EXIT
 
 # --- Script Start ---
@@ -39,13 +42,13 @@ if [ "$(id -u)" -ne "0" ]; then
     exit 1
 fi
 
-# Ensure log file exists and has proper permissions
+# Initialize log file with proper permissions.
 touch "$LOG_FILE"
 chmod 644 "$LOG_FILE"
 
 log_message "Starting Decred node setup..."
 
-# 2. Check for Dependencies (curl and jq)
+# 2. Verify Required Dependencies
 for cmd in curl jq; do
     if ! command -v "$cmd" &> /dev/null; then
         log_message "Error: '$cmd' is not installed. Please install it first."
@@ -55,7 +58,7 @@ for cmd in curl jq; do
 done
 
 
-# 3. Determine System Architecture
+# 3. Detect System Architecture
 arch=$(uname -m)
 case "$arch" in
     'x86_64') a='amd64' ;;
@@ -64,7 +67,7 @@ case "$arch" in
 esac
 log_message "Detected architecture: $arch ($a)"
 
-# 4. Fetch the Latest Decred Version from GitHub API
+# 4. Fetch Latest Decred Version
 log_message "Fetching the latest Decred version..."
 v=$(curl -sSf "https://api.github.com/repos/decred/decred-binaries/releases/latest" | jq -r .tag_name)
 if [ -z "$v" ] || [ "$v" = "null" ]; then
@@ -73,12 +76,12 @@ if [ -z "$v" ] || [ "$v" = "null" ]; then
 fi
 log_message "Latest version is $v"
 
-# 5. Download and Extract Decred Binaries
+# 5. Download and Verify Decred Binaries
 b="decred-linux-${a}-${v}.tar.gz"
 download_url="https://github.com/decred/decred-binaries/releases/download/${v}/${b}"
 manifest_url="https://github.com/decred/decred-binaries/releases/download/${v}/manifest-${v}.txt"
 
-# Create temporary directory
+# Create temporary directory for downloads.
 TMP_DIR=$(mktemp -d)
 log_message "Using temporary directory: $TMP_DIR"
 
@@ -103,15 +106,15 @@ else
 fi
 
 log_message "Extracting binaries to /usr/local/bin/..."
-# Extract to temp directory first, then move specific binaries
+# Extract archive to temporary directory.
 tar -xzf "${TMP_DIR}/${b}" -C "$TMP_DIR"
 
-# Find and copy the dcrd binary (and other binaries if needed)
+# Copy Decred binaries to system path.
 find "$TMP_DIR" -name "dcrd" -type f -executable -exec cp {} /usr/local/bin/ \;
 find "$TMP_DIR" -name "dcrctl" -type f -executable -exec cp {} /usr/local/bin/ \;
 find "$TMP_DIR" -name "dcrwallet" -type f -executable -exec cp {} /usr/local/bin/ \;
 
-# Verify dcrd was installed
+# Verify dcrd binary was successfully installed.
 if [ ! -x "/usr/local/bin/dcrd" ]; then
     log_message "Error: dcrd binary not found after extraction."
     exit 1
@@ -120,27 +123,27 @@ fi
 chmod +x /usr/local/bin/dcrd /usr/local/bin/dcrctl /usr/local/bin/dcrwallet 2>/dev/null || true
 log_message "Binaries installed successfully."
 
-# 6. Create Dedicated User and Data Directory
+# 6. Configure System User and Data Directory
 if ! id -u "$DCR_USER" >/dev/null 2>&1; then
     log_message "Creating system user '$DCR_USER'..."
     useradd -r -m -d "$DCR_HOME" -s /usr/sbin/nologin "$DCR_USER"
 else
     log_message "User '$DCR_USER' already exists."
 fi
-# Ensure the home directory exists and has correct permissions.
+# Create data directory structure with secure permissions.
 mkdir -p "$DCR_HOME"
 mkdir -p "$DCR_HOME/logs/mainnet"
 chown -R "${DCR_USER}:${DCR_USER}" "$DCR_HOME"
 chmod 700 "$DCR_HOME"
 log_message "Data directory configured at $DCR_HOME"
 
-# 7. Stop existing service if it's running
+# 7. Stop Existing Service
 if systemctl is-active --quiet dcrd.service; then
     log_message "Stopping existing dcrd service..."
     systemctl stop dcrd.service
 fi
 
-# 8. Create systemd Service File
+# 8. Create Systemd Service File
 log_message "Creating dcrd systemd service..."
 cat > /etc/systemd/system/dcrd.service <<EOF
 [Unit]
@@ -149,10 +152,10 @@ After=network.target
 
 [Service]
 Type=simple
-# Run the service as the dedicated, non-root user
+# Run as dedicated non-root user for security.
 User=$DCR_USER
 Group=$DCR_USER
-# Use the correct data directory
+# Specify data directory location.
 ExecStart=/usr/local/bin/dcrd --appdata=$DCR_HOME
 Restart=on-failure
 RestartSec=10
@@ -162,13 +165,13 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 EOF
 
-# 9. Enable and Start the Service
+# 9. Enable and Start Decred Service
 log_message "Enabling and starting dcrd service..."
 systemctl daemon-reload
 systemctl enable dcrd.service
 systemctl start dcrd.service
 
-# Wait a moment and verify the service started successfully
+# Verify service started successfully.
 sleep 2
 if systemctl is-active --quiet dcrd.service; then
     log_message "dcrd service started successfully."
@@ -177,40 +180,37 @@ else
     log_message "Check status with: systemctl status dcrd"
 fi
 
-# 10. Create Status Helper Script
+# 10. Create Status Monitoring Script
 log_message "Creating status script at /usr/local/bin/decred.sh..."
 
-# We will write the script using a 'Here Document'.
-# The version number ($v) and data directory ($DCR_HOME) are embedded
-# directly from the main script's variables.
+# Generate helper script with embedded version and path information.
 cat > /usr/local/bin/decred.sh <<EOF
 #!/bin/bash
 
-# --- Static ASCII Art Logo ---
+# Display Decred ASCII art logo.
 cat <<'ART'
 
-  _   _   _   _   _   _   _
- / \ / \ / \ / \ / \ / \ / \
-( d | e | c | r | e | d |   )
- \_/ \_/ \_/ \_/ \_/ \_/ \_/
-=============================
+    ██████╗ ███████╗ ██████╗██████╗ ███████╗██████╗ 
+    ██╔══██╗██╔════╝██╔════╝██╔══██╗██╔════╝██╔══██╗
+    ██║  ██║█████╗  ██║     ██████╔╝█████╗  ██║  ██║
+    ██║  ██║██╔══╝  ██║     ██╔══██╗██╔══╝  ██║  ██║
+    ██████╔╝███████╗╚██████╗██║  ██║███████╗██████╔╝
+    ╚═════╝ ╚══════╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═════╝ 
 ART
 
-# --- Dynamic Version Line ---
-# This line reads the version that was embedded during installation.
+# Display version information.
 printf " d c r d   n o d e   ${v}\n"
 echo   "============================="
-echo   "" # Adds a blank line for spacing
+echo   ""
 
-# --- Log Tailing ---
-# Follow the log file from the correct data directory.
+# Tail the dcrd log file in real-time.
 tail -f "${DCR_HOME}/logs/mainnet/dcrd.log"
 EOF
 
-# Make the new script executable
+# Make status script executable.
 chmod +x /usr/local/bin/decred.sh
 
-# 11. Final Status
+# 11. Display Installation Summary
 log_message "Installation complete."
 printf "\n✅ Installation complete! Your Decred node is running.\n"
 printf "   - To check the status: systemctl status dcrd\n"
