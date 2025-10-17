@@ -48,14 +48,54 @@ chmod 644 "$LOG_FILE"
 
 log_message "Starting Decred node setup..."
 
-# 2. Verify Required Dependencies
+# 2. Verify and Install Required Dependencies
+log_message "Checking required dependencies..."
+missing_deps=()
 for cmd in curl jq; do
     if ! command -v "$cmd" &> /dev/null; then
-        log_message "Error: '$cmd' is not installed. Please install it first."
-        log_message "On Debian/Ubuntu, run: apt-get update && apt-get install -y $cmd"
-        exit 1
+        log_message "'$cmd' is not installed."
+        missing_deps+=("$cmd")
+    else
+        log_message "'$cmd' is already installed."
     fi
 done
+
+if [ ${#missing_deps[@]} -gt 0 ]; then
+    log_message "Installing missing dependencies: ${missing_deps[*]}"
+    
+    # Detect package manager and install
+    if command -v apt-get &> /dev/null; then
+        log_message "Using apt-get package manager..."
+        apt-get update -qq
+        apt-get install -y "${missing_deps[@]}"
+    elif command -v yum &> /dev/null; then
+        log_message "Using yum package manager..."
+        yum install -y "${missing_deps[@]}"
+    elif command -v dnf &> /dev/null; then
+        log_message "Using dnf package manager..."
+        dnf install -y "${missing_deps[@]}"
+    elif command -v pacman &> /dev/null; then
+        log_message "Using pacman package manager..."
+        pacman -Sy --noconfirm "${missing_deps[@]}"
+    elif command -v apk &> /dev/null; then
+        log_message "Using apk package manager..."
+        apk add --no-cache "${missing_deps[@]}"
+    else
+        log_message "Error: Could not detect package manager. Please install manually: ${missing_deps[*]}"
+        exit 1
+    fi
+    
+    # Verify installation succeeded
+    for cmd in "${missing_deps[@]}"; do
+        if ! command -v "$cmd" &> /dev/null; then
+            log_message "Error: Failed to install '$cmd'."
+            exit 1
+        fi
+    done
+    log_message "All dependencies installed successfully."
+else
+    log_message "All required dependencies are already installed."
+fi
 
 
 # 3. Detect System Architecture
