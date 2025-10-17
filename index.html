@@ -174,7 +174,9 @@ fi
 mkdir -p "$DCR_HOME"
 mkdir -p "$DCR_HOME/logs/mainnet"
 chown -R "${DCR_USER}:${DCR_USER}" "$DCR_HOME"
-chmod 700 "$DCR_HOME"
+chmod 755 "$DCR_HOME"
+chmod 755 "$DCR_HOME/logs"
+chmod 755 "$DCR_HOME/logs/mainnet"
 log_message "Data directory configured at $DCR_HOME"
 
 # 7. Stop Existing Service
@@ -238,13 +240,28 @@ cat <<'ART'
     ╚═════╝ ╚══════╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═════╝ 
 ART
 
-# Display version information.
 printf " d c r d   n o d e   ${v}\n"
 echo   "============================="
 echo   ""
 
-# Tail the dcrd log file in real-time.
-tail -f "${DCR_HOME}/logs/mainnet/dcrd.log"
+# Use journalctl to view logs (works without special permissions)
+if command -v journalctl &> /dev/null; then
+    echo "Monitoring dcrd service logs..."
+    echo ""
+    journalctl -u dcrd -f --no-pager
+else
+    # Fallback to direct log file access
+    LOG_FILE="/var/lib/decred/logs/mainnet/dcrd.log"
+    if [ -r "$LOG_FILE" ]; then
+        tail -f "$LOG_FILE"
+    else
+        echo "Error: Cannot read log file. Try running with sudo:"
+        echo "  sudo journalctl -u dcrd -f"
+        echo "  or"
+        echo "  sudo tail -f $LOG_FILE"
+        exit 1
+    fi
+fi
 EOF
 
 # Make status script executable.
