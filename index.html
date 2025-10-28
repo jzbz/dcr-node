@@ -179,13 +179,34 @@ chmod 755 "$DCR_HOME/logs"
 chmod 755 "$DCR_HOME/logs/mainnet"
 log_message "Data directory configured at $DCR_HOME"
 
-# 7. Stop Existing Service
+# 7. Generate RPC Certificates
+log_message "Generating RPC certificates..."
+mkdir -p "$DCR_HOME/.dcrd"
+mkdir -p "$DCR_HOME/.dcrctl"
+
+# Generate certificates in .dcrd directory
+cd "$DCR_HOME/.dcrd"
+if ! command -v gencerts &> /dev/null; then
+    log_message "Error: gencerts command not found. Please install it first."
+    exit 1
+fi
+
+sudo -u "$DCR_USER" gencerts -L -f rpc.cert rpc.key
+log_message "Certificates generated in $DCR_HOME/.dcrd"
+
+# Copy certificates to .dcrctl directory
+cp rpc.cert rpc.key "$DCR_HOME/.dcrctl/"
+chown "${DCR_USER}:${DCR_USER}" "$DCR_HOME/.dcrctl/rpc.cert" "$DCR_HOME/.dcrctl/rpc.key"
+log_message "Certificates copied to $DCR_HOME/.dcrctl"
+cd - > /dev/null
+
+# 8. Stop Existing Service
 if systemctl is-active --quiet dcrd.service; then
     log_message "Stopping existing dcrd service..."
     systemctl stop dcrd.service
 fi
 
-# 8. Create Systemd Service File
+# 9. Create Systemd Service File
 log_message "Creating dcrd systemd service..."
 cat > /etc/systemd/system/dcrd.service <<EOF
 [Unit]
@@ -207,7 +228,7 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 EOF
 
-# 9. Enable and Start Decred Service
+# 10. Enable and Start Decred Service
 log_message "Enabling and starting dcrd service..."
 systemctl daemon-reload
 systemctl enable dcrd.service
@@ -222,7 +243,7 @@ else
     log_message "Check status with: systemctl status dcrd"
 fi
 
-# 10. Create Status Monitoring Script
+# 11. Create Status Monitoring Script
 log_message "Creating status script at /usr/local/bin/decred.sh..."
 
 # Generate helper script with embedded version and path information.
@@ -267,7 +288,7 @@ EOF
 # Make status script executable.
 chmod +x /usr/local/bin/decred.sh
 
-# 11. Display Installation Summary
+# 12. Display Installation Summary
 log_message "Installation complete."
 printf "\n✅ Installation complete! Your Decred node is running.\n"
 printf "   - To check the status: systemctl status dcrd\n"
