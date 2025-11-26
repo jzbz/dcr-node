@@ -97,7 +97,6 @@ else
     log_message "All required dependencies are already installed."
 fi
 
-
 # 3. Detect System Architecture
 arch=$(uname -m)
 case "$arch" in
@@ -115,6 +114,15 @@ if [ -z "$v" ] || [ "$v" = "null" ]; then
     exit 1
 fi
 log_message "Latest version is $v"
+
+# --- FIX: Stop service BEFORE downloading/copying binaries ---
+log_message "Checking for running service..."
+if systemctl is-active --quiet dcrd.service; then
+    log_message "Stopping existing dcrd service to allow upgrade..."
+    systemctl stop dcrd.service
+    log_message "Service stopped."
+fi
+# -------------------------------------------------------------
 
 # 5. Download and Verify Decred Binaries
 b="decred-linux-${a}-${v}.tar.gz"
@@ -150,9 +158,10 @@ log_message "Extracting binaries to /usr/local/bin/..."
 tar -xzf "${TMP_DIR}/${b}" -C "$TMP_DIR"
 
 # Copy Decred binaries to system path.
-find "$TMP_DIR" -name "dcrd" -type f -executable -exec cp {} /usr/local/bin/ \;
-find "$TMP_DIR" -name "dcrctl" -type f -executable -exec cp {} /usr/local/bin/ \;
-find "$TMP_DIR" -name "dcrwallet" -type f -executable -exec cp {} /usr/local/bin/ \;
+# Using 'cp -f' to force overwrite, though stopping the service handles the busy error.
+find "$TMP_DIR" -name "dcrd" -type f -executable -exec cp -f {} /usr/local/bin/ \;
+find "$TMP_DIR" -name "dcrctl" -type f -executable -exec cp -f {} /usr/local/bin/ \;
+find "$TMP_DIR" -name "dcrwallet" -type f -executable -exec cp -f {} /usr/local/bin/ \;
 
 # Verify dcrd binary was successfully installed.
 if [ ! -x "/usr/local/bin/dcrd" ]; then
@@ -179,14 +188,8 @@ chmod 755 "$DCR_HOME/logs"
 chmod 755 "$DCR_HOME/logs/mainnet"
 log_message "Data directory configured at $DCR_HOME"
 
-# 7. Stop Existing Service
-if systemctl is-active --quiet dcrd.service; then
-    log_message "Stopping existing dcrd service..."
-    systemctl stop dcrd.service
-fi
-
-# 8. Create Systemd Service File
-log_message "Creating dcrd systemd service..."
+# 7. Create Systemd Service File
+log_message "Creating/Updating dcrd systemd service..."
 cat > /etc/systemd/system/dcrd.service <<EOF
 [Unit]
 Description=Decred daemon
@@ -207,7 +210,7 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 EOF
 
-# 9. Enable and Start Decred Service
+# 8. Enable and Start Decred Service
 log_message "Enabling and starting dcrd service..."
 systemctl daemon-reload
 systemctl enable dcrd.service
@@ -222,7 +225,7 @@ else
     log_message "Check status with: systemctl status dcrd"
 fi
 
-# 10. Create Status Monitoring Script
+# 9. Create Status Monitoring Script
 log_message "Creating status script at /usr/local/bin/decred.sh..."
 
 # Generate helper script with embedded version and path information.
@@ -258,7 +261,7 @@ else
         echo "Error: Cannot read log file. Try running with sudo:"
         echo "  sudo journalctl -u dcrd -f"
         echo "  or"
-        echo "  sudo tail -f $LOG_FILE"
+        echo "  sudo tail -f \$LOG_FILE"
         exit 1
     fi
 fi
@@ -267,7 +270,7 @@ EOF
 # Make status script executable.
 chmod +x /usr/local/bin/decred.sh
 
-# 11. Display Installation Summary
+# 10. Display Installation Summary
 log_message "Installation complete."
 printf "\n✅ Installation complete! Your Decred node is running.\n"
 printf "   - To check the status: systemctl status dcrd\n"
