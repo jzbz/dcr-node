@@ -115,7 +115,7 @@ if [ -z "$v" ] || [ "$v" = "null" ]; then
 fi
 log_message "Latest version is $v"
 
-# --- FIX: Stop service BEFORE downloading/copying binaries ---
+# --- Stop service before downloading/copying binaries ---
 log_message "Checking for running service..."
 if systemctl is-active --quiet dcrd.service; then
     log_message "Stopping existing dcrd service to allow upgrade..."
