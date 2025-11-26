@@ -217,7 +217,36 @@ log_message "Certificates copied to $DCR_HOME/.dcrctl"
 # Return to previous directory
 cd - > /dev/null
 
-# 8. Create Systemd Service File
+# 8. Configure Authentication (Fixes dcrctl error)
+log_message "Configuring RPC authentication..."
+RPC_USER="dcr_admin"
+# Generate a random password
+RPC_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 32)
+
+# Create dcrd.conf for the service
+cat > "$DCR_HOME/dcrd.conf" <<EOF
+rpcuser=${RPC_USER}
+rpcpass=${RPC_PASS}
+rpccert=$DCR_HOME/.dcrd/rpc.cert
+rpckey=$DCR_HOME/.dcrd/rpc.key
+EOF
+
+# Secure permissions for dcrd.conf
+chown "${DCR_USER}:${DCR_USER}" "$DCR_HOME/dcrd.conf"
+chmod 600 "$DCR_HOME/dcrd.conf"
+
+# Create dcrctl.conf for the ROOT user (so 'dcrctl' works immediately)
+mkdir -p /root/.dcrctl
+cat > /root/.dcrctl/dcrctl.conf <<EOF
+rpcuser=${RPC_USER}
+rpcpass=${RPC_PASS}
+rpccert=$DCR_HOME/.dcrctl/rpc.cert
+rpcserver=127.0.0.1:9109
+EOF
+chmod 600 /root/.dcrctl/dcrctl.conf
+log_message "RPC configuration created for both daemon and root user."
+
+# 9. Create Systemd Service File
 log_message "Creating/Updating dcrd systemd service..."
 cat > /etc/systemd/system/dcrd.service <<EOF
 [Unit]
@@ -239,7 +268,7 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 EOF
 
-# 9. Enable and Start Decred Service
+# 10. Enable and Start Decred Service
 log_message "Enabling and starting dcrd service..."
 systemctl daemon-reload
 systemctl enable dcrd.service
@@ -254,7 +283,7 @@ else
     log_message "Check status with: systemctl status dcrd"
 fi
 
-# 10. Create Status Monitoring Script
+# 11. Create Status Monitoring Script
 log_message "Creating status script at /usr/local/bin/decred.sh..."
 
 # Generate helper script with embedded version and path information.
@@ -299,7 +328,7 @@ EOF
 # Make status script executable.
 chmod +x /usr/local/bin/decred.sh
 
-# 11. Display Installation Summary
+# 12. Display Installation Summary
 log_message "Installation complete."
 printf "\n✅ Installation complete! Your Decred node is running.\n"
 printf "   - To check the status: systemctl status dcrd\n"
