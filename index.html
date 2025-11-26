@@ -115,7 +115,7 @@ if [ -z "$v" ] || [ "$v" = "null" ]; then
 fi
 log_message "Latest version is $v"
 
-# --- Stop service BEFORE downloading/copying binaries ---
+# --- FIX: Stop service BEFORE downloading/copying binaries ---
 log_message "Checking for running service..."
 if systemctl is-active --quiet dcrd.service; then
     log_message "Stopping existing dcrd service to allow upgrade..."
@@ -158,11 +158,10 @@ log_message "Extracting binaries to /usr/local/bin/..."
 tar -xzf "${TMP_DIR}/${b}" -C "$TMP_DIR"
 
 # Copy Decred binaries to system path.
-# Using 'cp -f' to force overwrite.
+# Using 'cp -f' to force overwrite, though stopping the service handles the busy error.
 find "$TMP_DIR" -name "dcrd" -type f -executable -exec cp -f {} /usr/local/bin/ \;
 find "$TMP_DIR" -name "dcrctl" -type f -executable -exec cp -f {} /usr/local/bin/ \;
 find "$TMP_DIR" -name "dcrwallet" -type f -executable -exec cp -f {} /usr/local/bin/ \;
-find "$TMP_DIR" -name "gencerts" -type f -executable -exec cp -f {} /usr/local/bin/ \;
 
 # Verify dcrd binary was successfully installed.
 if [ ! -x "/usr/local/bin/dcrd" ]; then
@@ -170,7 +169,7 @@ if [ ! -x "/usr/local/bin/dcrd" ]; then
     exit 1
 fi
 
-chmod +x /usr/local/bin/dcrd /usr/local/bin/dcrctl /usr/local/bin/dcrwallet /usr/local/bin/gencerts 2>/dev/null || true
+chmod +x /usr/local/bin/dcrd /usr/local/bin/dcrctl /usr/local/bin/dcrwallet 2>/dev/null || true
 log_message "Binaries installed successfully."
 
 # 6. Configure System User and Data Directory
@@ -189,64 +188,7 @@ chmod 755 "$DCR_HOME/logs"
 chmod 755 "$DCR_HOME/logs/mainnet"
 log_message "Data directory configured at $DCR_HOME"
 
-# 7. Generate RPC Certificates
-log_message "Generating RPC certificates..."
-
-# Ensure subdirectories exist and are owned by user
-mkdir -p "$DCR_HOME/.dcrd"
-mkdir -p "$DCR_HOME/.dcrctl"
-chown "${DCR_USER}:${DCR_USER}" "$DCR_HOME/.dcrd" "$DCR_HOME/.dcrctl"
-
-# Move to .dcrd directory context
-cd "$DCR_HOME/.dcrd"
-
-if ! command -v gencerts &> /dev/null; then
-    log_message "Error: gencerts command not found. Please install it first."
-    exit 1
-fi
-
-# Generate certificates acting as the decred user
-sudo -u "$DCR_USER" gencerts -L -f rpc.cert rpc.key
-log_message "Certificates generated in $DCR_HOME/.dcrd"
-
-# Copy certificates to .dcrctl directory
-cp rpc.cert rpc.key "$DCR_HOME/.dcrctl/"
-chown "${DCR_USER}:${DCR_USER}" "$DCR_HOME/.dcrctl/rpc.cert" "$DCR_HOME/.dcrctl/rpc.key"
-log_message "Certificates copied to $DCR_HOME/.dcrctl"
-
-# Return to previous directory
-cd - > /dev/null
-
-# 8. Configure Authentication (Fixes dcrctl error)
-log_message "Configuring RPC authentication..."
-RPC_USER="dcr_admin"
-# Generate a random password
-RPC_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 32)
-
-# Create dcrd.conf for the service
-cat > "$DCR_HOME/dcrd.conf" <<EOF
-rpcuser=${RPC_USER}
-rpcpass=${RPC_PASS}
-rpccert=$DCR_HOME/.dcrd/rpc.cert
-rpckey=$DCR_HOME/.dcrd/rpc.key
-EOF
-
-# Secure permissions for dcrd.conf
-chown "${DCR_USER}:${DCR_USER}" "$DCR_HOME/dcrd.conf"
-chmod 600 "$DCR_HOME/dcrd.conf"
-
-# Create dcrctl.conf for the ROOT user (so 'dcrctl' works immediately)
-mkdir -p /root/.dcrctl
-cat > /root/.dcrctl/dcrctl.conf <<EOF
-rpcuser=${RPC_USER}
-rpcpass=${RPC_PASS}
-rpccert=$DCR_HOME/.dcrctl/rpc.cert
-rpcserver=127.0.0.1:9109
-EOF
-chmod 600 /root/.dcrctl/dcrctl.conf
-log_message "RPC configuration created for both daemon and root user."
-
-# 9. Create Systemd Service File
+# 7. Create Systemd Service File
 log_message "Creating/Updating dcrd systemd service..."
 cat > /etc/systemd/system/dcrd.service <<EOF
 [Unit]
@@ -268,7 +210,7 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 EOF
 
-# 10. Enable and Start Decred Service
+# 8. Enable and Start Decred Service
 log_message "Enabling and starting dcrd service..."
 systemctl daemon-reload
 systemctl enable dcrd.service
@@ -283,7 +225,7 @@ else
     log_message "Check status with: systemctl status dcrd"
 fi
 
-# 11. Create Status Monitoring Script
+# 9. Create Status Monitoring Script
 log_message "Creating status script at /usr/local/bin/decred.sh..."
 
 # Generate helper script with embedded version and path information.
@@ -328,10 +270,10 @@ EOF
 # Make status script executable.
 chmod +x /usr/local/bin/decred.sh
 
-# 12. Display Installation Summary
+# 10. Display Installation Summary
 log_message "Installation complete."
 printf "\n✅ Installation complete! Your Decred node is running.\n"
 printf "   - To check the status: systemctl status dcrd\n"
 printf "   - To monitor the log in real-time: decred.sh\n"
 printf "   - To view logs: journalctl -u dcrd -f\n"
-printf "   - Binaries installed: dcrd, dcrctl, dcrwallet, gencerts\n\n"
+printf "   - Binaries installed: dcrd, dcrctl, dcrwallet\n\n"
