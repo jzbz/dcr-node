@@ -35,162 +35,167 @@ cleanup() {
 # Register cleanup function to run on exit.
 trap cleanup EXIT
 
-# --- Script Start ---
-# 1. Check for Root Permissions
-if [ "$(id -u)" -ne "0" ]; then
-    echo "This script must be run as root. Please use sudo."
-    exit 1
-fi
-
-# Initialize log file with proper permissions.
-touch "$LOG_FILE"
-chmod 644 "$LOG_FILE"
-
-log_message "Starting Decred node setup..."
-
-# 2. Verify and Install Required Dependencies
-log_message "Checking required dependencies..."
-missing_deps=()
-for cmd in curl jq; do
-    if ! command -v "$cmd" &> /dev/null; then
-        log_message "'$cmd' is not installed."
-        missing_deps+=("$cmd")
-    else
-        log_message "'$cmd' is already installed."
-    fi
-done
-
-if [ ${#missing_deps[@]} -gt 0 ]; then
-    log_message "Installing missing dependencies: ${missing_deps[*]}"
-    
-    # Detect package manager and install
-    if command -v apt-get &> /dev/null; then
-        log_message "Using apt-get package manager..."
-        apt-get update -qq
-        apt-get install -y "${missing_deps[@]}"
-    elif command -v yum &> /dev/null; then
-        log_message "Using yum package manager..."
-        yum install -y "${missing_deps[@]}"
-    elif command -v dnf &> /dev/null; then
-        log_message "Using dnf package manager..."
-        dnf install -y "${missing_deps[@]}"
-    elif command -v pacman &> /dev/null; then
-        log_message "Using pacman package manager..."
-        pacman -Sy --noconfirm "${missing_deps[@]}"
-    elif command -v apk &> /dev/null; then
-        log_message "Using apk package manager..."
-        apk add --no-cache "${missing_deps[@]}"
-    else
-        log_message "Error: Could not detect package manager. Please install manually: ${missing_deps[*]}"
+# --- Main Logic ---
+main() {
+    # 1. Check for Root Permissions
+    if [ "$(id -u)" -ne "0" ]; then
+        echo "This script must be run as root. Please use sudo."
         exit 1
     fi
-    
-    # Verify installation succeeded
-    for cmd in "${missing_deps[@]}"; do
+
+    # Initialize log file with proper permissions.
+    touch "$LOG_FILE"
+    chmod 644 "$LOG_FILE"
+
+    log_message "Starting Decred node setup..."
+
+    # 2. Verify and Install Required Dependencies
+    log_message "Checking required dependencies..."
+    missing_deps=()
+    for cmd in curl jq; do
         if ! command -v "$cmd" &> /dev/null; then
-            log_message "Error: Failed to install '$cmd'."
-            exit 1
+            log_message "'$cmd' is not installed."
+            missing_deps+=("$cmd")
+        else
+            log_message "'$cmd' is already installed."
         fi
     done
-    log_message "All dependencies installed successfully."
-else
-    log_message "All required dependencies are already installed."
-fi
 
-# 3. Detect System Architecture
-arch=$(uname -m)
-case "$arch" in
-    'x86_64') a='amd64' ;;
-    'aarch64') a='arm64' ;;
-    *) log_message "Error: Unsupported architecture: $arch"; exit 1 ;;
-esac
-log_message "Detected architecture: $arch ($a)"
+    if [ ${#missing_deps[@]} -gt 0 ]; then
+        log_message "Installing missing dependencies: ${missing_deps[*]}"
 
-# 4. Fetch Latest Decred Version
-log_message "Fetching the latest Decred version..."
-v=$(curl -sSf "https://api.github.com/repos/decred/decred-binaries/releases/latest" | jq -r .tag_name)
-if [ -z "$v" ] || [ "$v" = "null" ]; then
-    log_message "Error: Could not fetch the latest version tag from GitHub."
-    exit 1
-fi
-log_message "Latest version is $v"
+        # Detect package manager and install
+        if command -v apt-get &> /dev/null; then
+            log_message "Using apt-get package manager..."
+            apt-get update -qq
+            apt-get install -y "${missing_deps[@]}"
+        elif command -v yum &> /dev/null; then
+            log_message "Using yum package manager..."
+            yum install -y "${missing_deps[@]}"
+        elif command -v dnf &> /dev/null; then
+            log_message "Using dnf package manager..."
+            dnf install -y "${missing_deps[@]}"
+        elif command -v pacman &> /dev/null; then
+            log_message "Using pacman package manager..."
+            pacman -Sy --noconfirm "${missing_deps[@]}"
+        elif command -v apk &> /dev/null; then
+            log_message "Using apk package manager..."
+            apk add --no-cache "${missing_deps[@]}"
+        else
+            log_message "Error: Could not detect package manager. Please install manually: ${missing_deps[*]}"
+            exit 1
+        fi
 
-# --- Stop service before downloading/copying binaries ---
-log_message "Checking for running service..."
-if systemctl is-active --quiet dcrd.service; then
-    log_message "Stopping existing dcrd service to allow upgrade..."
-    systemctl stop dcrd.service
-    log_message "Service stopped."
-fi
-# -------------------------------------------------------------
-
-# 5. Download and Verify Decred Binaries
-b="decred-linux-${a}-${v}.tar.gz"
-download_url="https://github.com/decred/decred-binaries/releases/download/${v}/${b}"
-manifest_url="https://github.com/decred/decred-binaries/releases/download/${v}/decred-${v}-manifest.txt"
-
-# Create temporary directory for downloads.
-TMP_DIR=$(mktemp -d)
-log_message "Using temporary directory: $TMP_DIR"
-
-log_message "Downloading $b..."
-if ! curl -sSfL -o "${TMP_DIR}/${b}" "$download_url"; then
-    log_message "Error: Failed to download binaries from $download_url"
-    exit 1
-fi
-
-log_message "Downloading manifest for checksum verification..."
-if curl -sSfL -o "${TMP_DIR}/manifest.txt" "$manifest_url"; then
-    log_message "Verifying checksum..."
-    cd "$TMP_DIR"
-    if grep "$b" manifest.txt | sha256sum -c --status; then
-        log_message "Checksum verification passed."
+        # Verify installation succeeded
+        for cmd in "${missing_deps[@]}"; do
+            if ! command -v "$cmd" &> /dev/null; then
+                log_message "Error: Failed to install '$cmd'."
+                exit 1
+            fi
+        done
+        log_message "All dependencies installed successfully."
     else
-        log_message "Warning: Checksum verification failed or not found in manifest."
+        log_message "All required dependencies are already installed."
     fi
-    cd - > /dev/null
-else
-    log_message "Warning: Could not download manifest file. Skipping checksum verification."
-fi
 
-log_message "Extracting binaries to /usr/local/bin/..."
-# Extract archive to temporary directory.
-tar -xzf "${TMP_DIR}/${b}" -C "$TMP_DIR"
+    # 3. Detect System Architecture
+    arch=$(uname -m)
+    case "$arch" in
+        'x86_64') a='amd64' ;;
+        'aarch64') a='arm64' ;;
+        *) log_message "Error: Unsupported architecture: $arch"; exit 1 ;;
+    esac
+    log_message "Detected architecture: $arch ($a)"
 
-# Copy Decred binaries to system path.
-# Using 'cp -f' to force overwrite, though stopping the service handles the busy error.
-find "$TMP_DIR" -name "dcrd" -type f -executable -exec cp -f {} /usr/local/bin/ \;
-find "$TMP_DIR" -name "dcrctl" -type f -executable -exec cp -f {} /usr/local/bin/ \;
-find "$TMP_DIR" -name "dcrwallet" -type f -executable -exec cp -f {} /usr/local/bin/ \;
+    # 4. Fetch Latest Decred Version
+    log_message "Fetching the latest Decred version..."
+    v=$(curl -sSf "https://api.github.com/repos/decred/decred-binaries/releases/latest" | jq -r .tag_name)
+    if [ -z "$v" ] || [ "$v" = "null" ]; then
+        log_message "Error: Could not fetch the latest version tag from GitHub."
+        exit 1
+    fi
+    log_message "Latest version is $v"
 
-# Verify dcrd binary was successfully installed.
-if [ ! -x "/usr/local/bin/dcrd" ]; then
-    log_message "Error: dcrd binary not found after extraction."
-    exit 1
-fi
+    # --- Stop service before downloading/copying binaries ---
+    log_message "Checking for running service..."
+    if systemctl is-active --quiet dcrd.service; then
+        log_message "Stopping existing dcrd service to allow upgrade..."
+        systemctl stop dcrd.service
+        log_message "Service stopped."
+    fi
+    # -------------------------------------------------------------
 
-chmod +x /usr/local/bin/dcrd /usr/local/bin/dcrctl /usr/local/bin/dcrwallet 2>/dev/null || true
-log_message "Binaries installed successfully."
+    # 5. Download and Verify Decred Binaries
+    b="decred-linux-${a}-${v}.tar.gz"
+    download_url="https://github.com/decred/decred-binaries/releases/download/${v}/${b}"
+    manifest_url="https://github.com/decred/decred-binaries/releases/download/${v}/decred-${v}-manifest.txt"
 
-# 6. Configure System User and Data Directory
-if ! id -u "$DCR_USER" >/dev/null 2>&1; then
-    log_message "Creating system user '$DCR_USER'..."
-    useradd -r -m -d "$DCR_HOME" -s /usr/sbin/nologin "$DCR_USER"
-else
-    log_message "User '$DCR_USER' already exists."
-fi
-# Create data directory structure with secure permissions.
-mkdir -p "$DCR_HOME"
-mkdir -p "$DCR_HOME/logs/mainnet"
-chown -R "${DCR_USER}:${DCR_USER}" "$DCR_HOME"
-chmod 755 "$DCR_HOME"
-chmod 755 "$DCR_HOME/logs"
-chmod 755 "$DCR_HOME/logs/mainnet"
-log_message "Data directory configured at $DCR_HOME"
+    # Create temporary directory for downloads.
+    TMP_DIR=$(mktemp -d)
+    log_message "Using temporary directory: $TMP_DIR"
 
-# 7. Create Systemd Service File
-log_message "Creating/Updating dcrd systemd service..."
-cat > /etc/systemd/system/dcrd.service <<EOF
+    log_message "Downloading $b..."
+    if ! curl -sSfL -o "${TMP_DIR}/${b}" "$download_url"; then
+        log_message "Error: Failed to download binaries from $download_url"
+        exit 1
+    fi
+
+    log_message "Downloading manifest for checksum verification..."
+    if curl -sSfL -o "${TMP_DIR}/manifest.txt" "$manifest_url"; then
+        log_message "Verifying checksum..."
+        cd "$TMP_DIR"
+        if grep "$b" manifest.txt | sha256sum -c --status; then
+            log_message "Checksum verification passed."
+        else
+            log_message "Warning: Checksum verification failed or not found in manifest."
+        fi
+        cd - > /dev/null
+    else
+        log_message "Warning: Could not download manifest file. Skipping checksum verification."
+    fi
+
+    log_message "Extracting binaries to /usr/local/bin/..."
+    # Extract archive to temporary directory.
+    tar -xzf "${TMP_DIR}/${b}" -C "$TMP_DIR"
+
+    # Safely install Decred binaries to system path (avoids "Text file busy" errors and handles permissions).
+    find "$TMP_DIR" -name "dcrd" -type f -exec install -m 755 {} /usr/local/bin/ \;
+    find "$TMP_DIR" -name "dcrctl" -type f -exec install -m 755 {} /usr/local/bin/ \;
+    find "$TMP_DIR" -name "dcrwallet" -type f -exec install -m 755 {} /usr/local/bin/ \;
+
+    # Verify dcrd binary was successfully installed.
+    if [ ! -x "/usr/local/bin/dcrd" ]; then
+        log_message "Error: dcrd binary not found after extraction."
+        exit 1
+    fi
+
+    log_message "Binaries installed successfully."
+
+    # 6. Configure System User and Data Directory
+    if ! id -u "$DCR_USER" >/dev/null 2>&1; then
+        log_message "Creating system user '$DCR_USER'..."
+        useradd -r -m -d "$DCR_HOME" -s /usr/sbin/nologin "$DCR_USER"
+    else
+        log_message "User '$DCR_USER' already exists."
+    fi
+
+    # Create data directory structure with secure permissions.
+    mkdir -p "$DCR_HOME"
+    mkdir -p "$DCR_HOME/logs/mainnet"
+
+    # Change ownership of root directories only (avoids locking up disk I/O on existing nodes).
+    chown "${DCR_USER}:${DCR_USER}" "$DCR_HOME"
+    chown "${DCR_USER}:${DCR_USER}" "$DCR_HOME/logs"
+    chown "${DCR_USER}:${DCR_USER}" "$DCR_HOME/logs/mainnet"
+
+    chmod 755 "$DCR_HOME"
+    chmod 755 "$DCR_HOME/logs"
+    chmod 755 "$DCR_HOME/logs/mainnet"
+    log_message "Data directory configured at $DCR_HOME"
+
+    # 7. Create Systemd Service File
+    log_message "Creating/Updating dcrd systemd service..."
+    cat > /etc/systemd/system/dcrd.service <<EOF
 [Unit]
 Description=Decred daemon
 After=network.target
@@ -210,37 +215,37 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 EOF
 
-# 8. Enable and Start Decred Service
-log_message "Enabling and starting dcrd service..."
-systemctl daemon-reload
-systemctl enable dcrd.service
-systemctl start dcrd.service
+    # 8. Enable and Start Decred Service
+    log_message "Enabling and starting dcrd service..."
+    systemctl daemon-reload
+    systemctl enable dcrd.service
+    systemctl start dcrd.service
 
-# Verify service started successfully.
-sleep 2
-if systemctl is-active --quiet dcrd.service; then
-    log_message "dcrd service started successfully."
-else
-    log_message "Warning: dcrd service may not have started correctly."
-    log_message "Check status with: systemctl status dcrd"
-fi
+    # Verify service started successfully.
+    sleep 2
+    if systemctl is-active --quiet dcrd.service; then
+        log_message "dcrd service started successfully."
+    else
+        log_message "Warning: dcrd service may not have started correctly."
+        log_message "Check status with: systemctl status dcrd"
+    fi
 
-# 9. Create Status Monitoring Script
-log_message "Creating status script at /usr/local/bin/decred.sh..."
+    # 9. Create Status Monitoring Script
+    log_message "Creating status script at /usr/local/bin/decred.sh..."
 
-# Generate helper script with embedded version and path information.
-cat > /usr/local/bin/decred.sh <<EOF
+    # Generate helper script. Note the escaped \$LOG_FILE variables.
+    cat > /usr/local/bin/decred.sh <<EOF
 #!/bin/bash
 
 # Display Decred ASCII art logo.
 cat <<'ART'
 
-    ██████╗ ███████╗ ██████╗██████╗ ███████╗██████╗ 
+    ██████╗ ███████╗ ██████╗██████╗ ███████╗██████╗
     ██╔══██╗██╔════╝██╔════╝██╔══██╗██╔════╝██╔══██╗
     ██║  ██║█████╗  ██║     ██████╔╝█████╗  ██║  ██║
     ██║  ██║██╔══╝  ██║     ██╔══██╗██╔══╝  ██║  ██║
     ██████╔╝███████╗╚██████╗██║  ██║███████╗██████╔╝
-    ╚═════╝ ╚══════╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═════╝ 
+    ╚═════╝ ╚══════╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═════╝
 ART
 
 printf " d c r d   n o d e   ${v}\n"
@@ -255,25 +260,30 @@ if command -v journalctl &> /dev/null; then
 else
     # Fallback to direct log file access
     LOG_FILE="/var/lib/decred/logs/mainnet/dcrd.log"
-    if [ -r "$LOG_FILE" ]; then
-        tail -f "$LOG_FILE"
+    if [ -r "\$LOG_FILE" ]; then
+        tail -f "\$LOG_FILE"
     else
         echo "Error: Cannot read log file. Try running with sudo:"
         echo "  sudo journalctl -u dcrd -f"
         echo "  or"
-        echo "  sudo tail -f \$LOG_FILE"
+        echo "  sudo tail -f \\\$LOG_FILE"
         exit 1
     fi
 fi
 EOF
 
-# Make status script executable.
-chmod +x /usr/local/bin/decred.sh
+    # Make status script executable.
+    chmod +x /usr/local/bin/decred.sh
 
-# 10. Display Installation Summary
-log_message "Installation complete."
-printf "\n✅ Installation complete! Your Decred node is running.\n"
-printf "   - To check the status: systemctl status dcrd\n"
-printf "   - To monitor the log in real-time: decred.sh\n"
-printf "   - To view logs: journalctl -u dcrd -f\n"
-printf "   - Binaries installed: dcrd, dcrctl, dcrwallet\n\n"
+    # 10. Display Installation Summary
+    log_message "Installation complete."
+    printf "\n✅ Installation complete! Your Decred node is running.\n"
+    printf "   - To check the status: systemctl status dcrd\n"
+    printf "   - To monitor the log in real-time: decred.sh\n"
+    printf "   - To view logs: journalctl -u dcrd -f\n"
+    printf "   - Binaries installed: dcrd, dcrctl, dcrwallet\n\n"
+}
+
+# --- Script Execution ---
+# Execute the main function only if the script was downloaded completely
+main "$@"
