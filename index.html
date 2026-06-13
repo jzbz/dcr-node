@@ -1,177 +1,411 @@
-#!/bin/bash
+#!/usr/bin/env bash
+#
 # Decred Node Installation Script
-# Installs and configures a Decred node as a systemd service.
+# Installs and configures a Decred (dcrd) node as a hardened systemd service.
 #
 # Usage:
 #   curl -fsSL https://node.dcr.pw | sudo bash
+#
+# Optional environment overrides:
+#   DCR_VERSION=v2.1.5        Pin a specific release instead of "latest"
+#   DCR_FORCE=1               Reinstall even if the latest version is already present
+#   DCR_SKIP_GPG=1            Skip GPG signature verification (NOT recommended)
+#   DCR_SKIP_SPACE_CHECK=1    Skip the free-disk-space preflight check
+#   GITHUB_TOKEN=...          Avoid GitHub API rate limits (60 req/hr unauthenticated)
 
-# Exit immediately if a command exits with a non-zero status.
-set -euo pipefail
+set -Eeuo pipefail
 
 # --- Configuration ---
-# Dedicated system user for running the Decred daemon.
-DCR_USER="decred"
-# Data directory for blockchain and configuration files.
-DCR_HOME="/var/lib/decred"
-# Installation log file location.
-LOG_FILE="/var/log/decred_setup.log"
-# Temporary directory for downloads (set during execution).
+readonly DCR_USER="decred"
+readonly DCR_HOME="/var/lib/decred"
+readonly LOG_FILE="/var/log/decred_setup.log"
+readonly GH_REPO="decred/decred-binaries"
+readonly BIN_DIR="/usr/local/bin"
+readonly MIN_DISK_GB=20
+# Decred Release signing key (primary key fingerprint). The full public key is
+# embedded below and re-verified against this fingerprint at runtime.
+readonly DCR_RELEASE_FPR="FD13B6835E248FAF4BD1838D6DF634AA7608AF04"
+
+# Populated at runtime.
 TMP_DIR=""
+GNUPGHOME=""
+TARBALL_PATH=""
+# Set to 1 when binaries or the systemd unit actually change, so no-op reruns
+# don't needlessly bounce a healthy node.
+NEEDS_RESTART=0
+
+decred_release_pubkey() {
+    # Decred Release signing key, pinned in-script (fingerprint $DCR_RELEASE_FPR).
+    # Authenticity is re-checked at runtime against DCR_RELEASE_FPR after import.
+    cat <<'DCR_PUBKEY_EOF'
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+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
+O6GuapL0x1I9SeIk9WX9VRrpZmENhlri
+=JrM6
+-----END PGP PUBLIC KEY BLOCK-----
+DCR_PUBKEY_EOF
+}
+
 
 # --- Functions ---
-# Log messages to both stdout and log file with timestamp.
 log_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
 }
 
-# Clean up temporary directory on script exit.
+die() {
+    log_message "ERROR: $1"
+    exit 1
+}
+
+# Breadcrumbs for plain `set -e` failures that don't go through die().
+# (`set -E` above makes this trap fire inside functions too.)
+on_error() {
+    trap - ERR  # avoid any chance of recursion while logging
+    log_message "ERROR: '${3}' failed (exit ${1}) at line ${2}."
+}
+trap 'on_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
+
 cleanup() {
-    if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
-        log_message "Cleaning up temporary directory..."
+    # Best-effort: shut down the throwaway gpg agent and wipe the temp dir.
+    if [ -n "${GNUPGHOME:-}" ] && [ -d "$GNUPGHOME" ]; then
+        gpgconf --homedir "$GNUPGHOME" --kill gpg-agent >/dev/null 2>&1 || true
+    fi
+    if [ -n "${TMP_DIR:-}" ] && [ -d "$TMP_DIR" ]; then
+        log_message "Cleaning up temporary directory: $TMP_DIR"
         rm -rf "$TMP_DIR"
     fi
 }
-
-# Register cleanup function to run on exit.
 trap cleanup EXIT
 
-# --- Main Logic ---
-main() {
-    # 1. Check for Root Permissions
-    if [ "$(id -u)" -ne "0" ]; then
-        echo "This script must be run as root. Please use sudo."
+require_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "This script must be run as root. Please use sudo." >&2
         exit 1
     fi
+}
 
-    # Initialize log file with proper permissions.
-    touch "$LOG_FILE"
-    chmod 644 "$LOG_FILE"
+require_systemd() {
+    if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
+        die "This installer requires a systemd-based system."
+    fi
+}
 
-    log_message "Starting Decred node setup..."
+check_disk_space() {
+    if [ "${DCR_SKIP_SPACE_CHECK:-0}" = "1" ]; then
+        log_message "Skipping disk space check (DCR_SKIP_SPACE_CHECK=1)."
+        return 0
+    fi
+    local parent avail_gb
+    parent=$(dirname "$DCR_HOME")
+    avail_gb=$(df -Pk "$parent" 2>/dev/null | awk 'NR==2 {print int($4/1024/1024)}') || true
+    if [ -z "${avail_gb:-}" ]; then
+        log_message "Warning: could not determine free space on ${parent}; continuing."
+        return 0
+    fi
+    if [ "$avail_gb" -lt "$MIN_DISK_GB" ]; then
+        die "Only ${avail_gb} GB free on ${parent}. The mainnet chain needs ~${MIN_DISK_GB} GB and keeps growing. Free up space, or set DCR_SKIP_SPACE_CHECK=1 to proceed anyway."
+    fi
+    log_message "Disk space check passed (${avail_gb} GB free on ${parent})."
+}
 
-    # 2. Verify and Install Required Dependencies
+# Map a required command to the package that provides it.
+pkg_for_cmd() {
+    case "$1" in
+        gpg) echo "gnupg" ;;
+        sha256sum) echo "coreutils" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+install_dependencies() {
     log_message "Checking required dependencies..."
-    missing_deps=()
-    for cmd in curl jq; do
-        if ! command -v "$cmd" &> /dev/null; then
-            log_message "'$cmd' is not installed."
-            missing_deps+=("$cmd")
-        else
+    local required=(curl jq gpg tar sha256sum)
+    local missing_pkgs=()
+    local cmd pkg
+
+    for cmd in "${required[@]}"; do
+        if command -v "$cmd" >/dev/null 2>&1; then
             log_message "'$cmd' is already installed."
+        else
+            log_message "'$cmd' is missing."
+            pkg=$(pkg_for_cmd "$cmd")
+            # Avoid duplicate package names (e.g. gpg + sha256sum -> coreutils).
+            [[ " ${missing_pkgs[*]-} " == *" $pkg "* ]] || missing_pkgs+=("$pkg")
         fi
     done
 
-    if [ ${#missing_deps[@]} -gt 0 ]; then
-        log_message "Installing missing dependencies: ${missing_deps[*]}"
+    [ ${#missing_pkgs[@]} -eq 0 ] && return 0
 
-        # Detect package manager and install
-        if command -v apt-get &> /dev/null; then
-            log_message "Using apt-get package manager..."
-            apt-get update -qq
-            apt-get install -y "${missing_deps[@]}"
-        elif command -v yum &> /dev/null; then
-            log_message "Using yum package manager..."
-            yum install -y "${missing_deps[@]}"
-        elif command -v dnf &> /dev/null; then
-            log_message "Using dnf package manager..."
-            dnf install -y "${missing_deps[@]}"
-        elif command -v pacman &> /dev/null; then
-            log_message "Using pacman package manager..."
-            pacman -Sy --noconfirm "${missing_deps[@]}"
-        elif command -v apk &> /dev/null; then
-            log_message "Using apk package manager..."
-            apk add --no-cache "${missing_deps[@]}"
-        else
-            log_message "Error: Could not detect package manager. Please install manually: ${missing_deps[*]}"
-            exit 1
-        fi
-
-        # Verify installation succeeded
-        for cmd in "${missing_deps[@]}"; do
-            if ! command -v "$cmd" &> /dev/null; then
-                log_message "Error: Failed to install '$cmd'."
-                exit 1
-            fi
-        done
-        log_message "All dependencies installed successfully."
+    log_message "Installing missing packages: ${missing_pkgs[*]}"
+    if command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get update -qq
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${missing_pkgs[@]}"
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y "${missing_pkgs[@]}"
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y "${missing_pkgs[@]}"
+    elif command -v pacman >/dev/null 2>&1; then
+        # `-Sy <pkg>` risks a partial upgrade on Arch (installs against a newer
+        # DB without upgrading deps); a full sync+upgrade is the supported path.
+        pacman -Syu --needed --noconfirm "${missing_pkgs[@]}"
+    elif command -v apk >/dev/null 2>&1; then
+        apk add --no-cache "${missing_pkgs[@]}"
     else
-        log_message "All required dependencies are already installed."
+        die "Could not detect a package manager. Please install: ${missing_pkgs[*]}"
     fi
 
-    # 3. Detect System Architecture
-    arch=$(uname -m)
-    case "$arch" in
-        'x86_64') a='amd64' ;;
-        'aarch64') a='arm64' ;;
-        *) log_message "Error: Unsupported architecture: $arch"; exit 1 ;;
+    for cmd in "${required[@]}"; do
+        command -v "$cmd" >/dev/null 2>&1 || die "Failed to install '$cmd'."
+    done
+    log_message "All dependencies installed successfully."
+}
+
+detect_arch() {
+    local machine
+    machine=$(uname -m)
+    case "$machine" in
+        x86_64) ARCH="amd64" ;;
+        aarch64 | arm64) ARCH="arm64" ;;
+        *) die "Unsupported architecture: $machine" ;;
     esac
-    log_message "Detected architecture: $arch ($a)"
+    log_message "Detected architecture: $machine ($ARCH)"
+}
 
-    # 4. Fetch Latest Decred Version
-    log_message "Fetching the latest Decred version..."
-    v=$(curl -sSf "https://api.github.com/repos/decred/decred-binaries/releases/latest" | jq -r .tag_name)
-    if [ -z "$v" ] || [ "$v" = "null" ]; then
-        log_message "Error: Could not fetch the latest version tag from GitHub."
-        exit 1
+# Wrapper around curl. Sends the GitHub token only to the API host: release
+# assets are public and redirect cross-host, where an Authorization header is
+# useless at best (modern curl strips it; old curl would leak it).
+gh_curl() {
+    local url="$1"; shift
+    local -a opts=(-sSfL --proto '=https' --proto-redir '=https' --retry 3 --connect-timeout 15)
+    if [ -n "${GITHUB_TOKEN:-}" ] && [[ "$url" == https://api.github.com/* ]]; then
+        opts+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
     fi
-    log_message "Latest version is $v"
+    curl "${opts[@]}" "$@" "$url"
+}
 
-    # --- Stop service before downloading/copying binaries ---
-    log_message "Checking for running service..."
-    if systemctl is-active --quiet dcrd.service; then
+resolve_version() {
+    if [ -n "${DCR_VERSION:-}" ]; then
+        VERSION="$DCR_VERSION"
+        log_message "Using pinned version: $VERSION"
+        return 0
+    fi
+    log_message "Fetching the latest Decred version..."
+    # `|| die` keeps a curl failure (e.g. a 403 rate limit) from tripping
+    # `set -e` before we can print a useful message; `jq -e` catches null.
+    VERSION=$(gh_curl "https://api.github.com/repos/${GH_REPO}/releases/latest" | jq -er '.tag_name') \
+        || die "Could not fetch the latest version tag from GitHub (rate limited? set GITHUB_TOKEN)."
+    log_message "Latest version is $VERSION"
+}
+
+# Returns 0 if the requested version is already installed.
+already_installed() {
+    [ "${DCR_FORCE:-0}" = "1" ] && return 1
+    [ -x "${BIN_DIR}/dcrd" ] || return 1
+    local current
+    current=$("${BIN_DIR}/dcrd" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1) || true
+    [ -n "$current" ] && [ "$current" = "${VERSION#v}" ]
+}
+
+stop_service_if_running() {
+    if systemctl is-active --quiet dcrd.service 2>/dev/null; then
         log_message "Stopping existing dcrd service to allow upgrade..."
         systemctl stop dcrd.service
         log_message "Service stopped."
     fi
-    # -------------------------------------------------------------
+}
 
-    # 5. Download and Verify Decred Binaries
-    b="decred-linux-${a}-${v}.tar.gz"
-    download_url="https://github.com/decred/decred-binaries/releases/download/${v}/${b}"
-    manifest_url="https://github.com/decred/decred-binaries/releases/download/${v}/decred-${v}-manifest.txt"
+download_and_verify() {
+    local tarball="decred-linux-${ARCH}-${VERSION}.tar.gz"
+    local base="https://github.com/${GH_REPO}/releases/download/${VERSION}"
+    local manifest="decred-${VERSION}-manifest.txt"
 
-    # Create temporary directory for downloads.
-    TMP_DIR=$(mktemp -d)
-    log_message "Using temporary directory: $TMP_DIR"
+    log_message "Downloading $tarball..."
+    gh_curl "${base}/${tarball}" -o "${TMP_DIR}/${tarball}" \
+        || die "Failed to download binaries from ${base}/${tarball}"
 
-    log_message "Downloading $b..."
-    if ! curl -sSfL -o "${TMP_DIR}/${b}" "$download_url"; then
-        log_message "Error: Failed to download binaries from $download_url"
-        exit 1
-    fi
+    log_message "Downloading manifest..."
+    gh_curl "${base}/${manifest}" -o "${TMP_DIR}/manifest.txt" \
+        || die "Failed to download manifest. Refusing to install unverified binaries."
 
-    log_message "Downloading manifest for checksum verification..."
-    if curl -sSfL -o "${TMP_DIR}/manifest.txt" "$manifest_url"; then
-        log_message "Verifying checksum..."
-        cd "$TMP_DIR"
-        if grep "$b" manifest.txt | sha256sum -c --status; then
-            log_message "Checksum verification passed."
-        else
-            log_message "Warning: Checksum verification failed or not found in manifest."
-        fi
-        cd - > /dev/null
+    # --- Step 1: GPG signature on the manifest -----------------------------
+    if [ "${DCR_SKIP_GPG:-0}" = "1" ]; then
+        log_message "WARNING: DCR_SKIP_GPG=1 set; skipping signature verification."
     else
-        log_message "Warning: Could not download manifest file. Skipping checksum verification."
+        verify_manifest_signature "$base" "$manifest"
     fi
 
-    log_message "Extracting binaries to /usr/local/bin/..."
-    # Extract archive to temporary directory.
-    tar -xzf "${TMP_DIR}/${b}" -C "$TMP_DIR"
+    # --- Step 2: SHA-256 of the tarball against the (now-trusted) manifest --
+    log_message "Verifying checksum..."
+    # Exact-match the filename field (sha256sum format: "<hash>  <name>" or
+    # "<hash> *<name>") instead of substring-grepping, which could match
+    # sibling entries like "<name>.sig" and feed sha256sum the wrong lines.
+    local sums
+    sums=$(awk -v f="$tarball" '$NF == f || $NF == ("*" f)' "${TMP_DIR}/manifest.txt")
+    [ -n "$sums" ] || die "Binary '$tarball' not listed in manifest."
+    [ "$(grep -c . <<<"$sums")" -eq 1 ] || die "Ambiguous manifest: multiple entries for '$tarball'."
+    ( cd "$TMP_DIR" && sha256sum -c --status - <<<"$sums" ) \
+        || die "Checksum verification failed. Aborting to protect system integrity."
+    log_message "Checksum verification passed."
 
-    # Safely install Decred binaries to system path (avoids "Text file busy" errors and handles permissions).
-    find "$TMP_DIR" -name "dcrd" -type f -exec install -m 755 {} /usr/local/bin/ \;
-    find "$TMP_DIR" -name "dcrctl" -type f -exec install -m 755 {} /usr/local/bin/ \;
-    find "$TMP_DIR" -name "dcrwallet" -type f -exec install -m 755 {} /usr/local/bin/ \;
+    TARBALL_PATH="${TMP_DIR}/${tarball}"
+}
 
-    # Verify dcrd binary was successfully installed.
-    if [ ! -x "/usr/local/bin/dcrd" ]; then
-        log_message "Error: dcrd binary not found after extraction."
-        exit 1
+verify_manifest_signature() {
+    local base="$1" manifest="$2"
+
+    log_message "Downloading manifest signature..."
+    gh_curl "${base}/${manifest}.asc" -o "${TMP_DIR}/manifest.txt.asc" \
+        || die "Could not download manifest signature (.asc). Aborting."
+
+    # Throwaway, locked-down keyring inside the temp dir.
+    GNUPGHOME="${TMP_DIR}/gnupg"
+    mkdir -p "$GNUPGHOME"
+    chmod 700 "$GNUPGHOME"
+
+    log_message "Importing embedded Decred Release signing key..."
+    decred_release_pubkey | gpg --homedir "$GNUPGHOME" --batch --import >/dev/null 2>&1 \
+        || die "Failed to import the embedded Decred Release key."
+
+    # Defense in depth: confirm the embedded key really is the pinned key.
+    local got_fpr
+    got_fpr=$(gpg --homedir "$GNUPGHOME" --batch --with-colons --fingerprint 2>/dev/null \
+              | awk -F: '/^fpr:/{print $10; exit}')
+    [ "$got_fpr" = "$DCR_RELEASE_FPR" ] \
+        || die "Embedded key fingerprint mismatch (got ${got_fpr:-none})."
+
+    log_message "Verifying manifest signature..."
+    # Buffer gpg's status output instead of piping into `grep -q`: under
+    # `pipefail`, grep exiting at the first match can SIGPIPE gpg (exit 141)
+    # and spuriously fail this check on a perfectly valid signature.
+    local status_out
+    status_out=$(gpg --homedir "$GNUPGHOME" --batch --status-fd 1 \
+        --verify "${TMP_DIR}/manifest.txt.asc" "${TMP_DIR}/manifest.txt" 2>/dev/null) || true
+
+    # Assert a good signature that chains to the pinned *primary* key: the
+    # primary fingerprint is the last field of the VALIDSIG status line.
+    if grep -Eq "VALIDSIG .* ${DCR_RELEASE_FPR}\$" <<<"$status_out"; then
+        log_message "Signature verification passed (signed by Decred Release)."
+    else
+        die "Manifest signature is INVALID or not from the pinned Decred key. Aborting."
     fi
+}
 
+install_binaries() {
+    log_message "Extracting and installing binaries to ${BIN_DIR}..."
+    # --no-same-owner: as root, don't preserve whatever UIDs the archive holds.
+    tar --no-same-owner -xzf "$TARBALL_PATH" -C "$TMP_DIR"
+
+    local found_dcrd=0 b path
+    for b in dcrd dcrctl dcrwallet; do
+        path=$(find "$TMP_DIR" -type f -name "$b" -print -quit)
+        if [ -n "$path" ]; then
+            install -m 0755 "$path" "${BIN_DIR}/${b}"
+            log_message "Installed ${b}."
+            [ "$b" = "dcrd" ] && found_dcrd=1
+        else
+            log_message "Note: '$b' not found in archive; skipping."
+        fi
+    done
+
+    if [ "$found_dcrd" -ne 1 ] || [ ! -x "${BIN_DIR}/dcrd" ]; then
+        die "dcrd binary not found after extraction."
+    fi
+    NEEDS_RESTART=1
     log_message "Binaries installed successfully."
+}
 
-    # 6. Configure System User and Data Directory
+setup_user_and_dirs() {
     if ! id -u "$DCR_USER" >/dev/null 2>&1; then
         log_message "Creating system user '$DCR_USER'..."
         useradd -r -m -d "$DCR_HOME" -s /usr/sbin/nologin "$DCR_USER"
@@ -179,65 +413,91 @@ main() {
         log_message "User '$DCR_USER' already exists."
     fi
 
-    # Create data directory structure with secure permissions.
-    mkdir -p "$DCR_HOME"
     mkdir -p "$DCR_HOME/logs/mainnet"
+    chown -R "${DCR_USER}:${DCR_USER}" "$DCR_HOME"
+    chmod 700 "$DCR_HOME"
+    log_message "Data directory configured securely at $DCR_HOME"
+}
 
-    # Change ownership of root directories only (avoids locking up disk I/O on existing nodes).
-    chown "${DCR_USER}:${DCR_USER}" "$DCR_HOME"
-    chown "${DCR_USER}:${DCR_USER}" "$DCR_HOME/logs"
-    chown "${DCR_USER}:${DCR_USER}" "$DCR_HOME/logs/mainnet"
+write_service() {
+    local unit="/etc/systemd/system/dcrd.service"
+    local staged="${TMP_DIR}/dcrd.service"
 
-    chmod 755 "$DCR_HOME"
-    chmod 755 "$DCR_HOME/logs"
-    chmod 755 "$DCR_HOME/logs/mainnet"
-    log_message "Data directory configured at $DCR_HOME"
-
-    # 7. Create Systemd Service File
-    log_message "Creating/Updating dcrd systemd service..."
-    cat > /etc/systemd/system/dcrd.service <<EOF
+    log_message "Rendering dcrd systemd unit..."
+    cat > "$staged" <<EOF
 [Unit]
-Description=Decred daemon
-After=network.target
+Description=Decred daemon (dcrd)
+Documentation=https://docs.decred.org
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-Type=simple
-# Run as dedicated non-root user for security.
+# Type=exec (vs simple) fails activation immediately if the binary can't be
+# executed, instead of reporting "active" and then flapping to failed.
+Type=exec
 User=$DCR_USER
 Group=$DCR_USER
-# Specify data directory location.
-ExecStart=/usr/local/bin/dcrd --appdata=$DCR_HOME
+ExecStart=${BIN_DIR}/dcrd --appdata=$DCR_HOME
 Restart=on-failure
 RestartSec=10
+TimeoutStopSec=120
 LimitNOFILE=65536
+
+# --- Security hardening ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=$DCR_HOME
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectHostname=true
+# /proc hardening (systemd >= 247; older versions log a warning and ignore).
+ProtectProc=invisible
+ProcSubset=pid
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+UMask=0077
+# dcrd is a pure-Go daemon and runs fine under W^X memory.
+# Remove the next line if the service fails to start on an unusual platform.
+MemoryDenyWriteExecute=true
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    # 8. Enable and Start Decred Service
-    log_message "Enabling and starting dcrd service..."
-    systemctl daemon-reload
-    systemctl enable dcrd.service
-    systemctl start dcrd.service
-
-    # Verify service started successfully.
-    sleep 2
-    if systemctl is-active --quiet dcrd.service; then
-        log_message "dcrd service started successfully."
+    # Only (re)install the unit when it actually changed, so a no-op rerun
+    # doesn't trigger a restart of a healthy node.
+    if [ -f "$unit" ] && cmp -s "$staged" "$unit"; then
+        log_message "Systemd unit is up to date."
     else
-        log_message "Warning: dcrd service may not have started correctly."
-        log_message "Check status with: systemctl status dcrd"
+        install -m 0644 "$staged" "$unit"
+        NEEDS_RESTART=1
+        log_message "Systemd unit installed/updated."
     fi
+}
 
-    # 9. Create Status Monitoring Script
-    log_message "Creating status script at /usr/local/bin/decred.sh..."
+write_status_script() {
+    log_message "Creating status script at ${BIN_DIR}/decred.sh..."
+    # Version line written with expansion; the rest is literal (quoted heredoc).
+    cat > "${BIN_DIR}/decred.sh" <<EOF
+#!/usr/bin/env bash
+DCRD_VERSION="${VERSION}"
+EOF
+    cat >> "${BIN_DIR}/decred.sh" <<'EOF'
+set -euo pipefail
 
-    # Generate helper script. Note the escaped \$LOG_FILE variables.
-    cat > /usr/local/bin/decred.sh <<EOF
-#!/bin/bash
-
-# Display Decred ASCII art logo.
 cat <<'ART'
 
     ██████╗ ███████╗ ██████╗██████╗ ███████╗██████╗
@@ -248,42 +508,119 @@ cat <<'ART'
     ╚═════╝ ╚══════╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═════╝
 ART
 
-printf " d c r d   n o d e   ${v}\n"
-echo   "============================="
-echo   ""
+printf ' d c r d   n o d e   %s\n' "$DCRD_VERSION"
+echo "============================="
+echo ""
 
-# Use journalctl to view logs (works without special permissions)
-if command -v journalctl &> /dev/null; then
-    echo "Monitoring dcrd service logs..."
-    echo ""
-    journalctl -u dcrd -f --no-pager
-else
-    # Fallback to direct log file access
-    LOG_FILE="/var/lib/decred/logs/mainnet/dcrd.log"
-    if [ -r "\$LOG_FILE" ]; then
-        tail -f "\$LOG_FILE"
-    else
-        echo "Error: Cannot read log file. Try running with sudo:"
-        echo "  sudo journalctl -u dcrd -f"
-        echo "  or"
-        echo "  sudo tail -f \\\$LOG_FILE"
-        exit 1
-    fi
-fi
-EOF
-
-    # Make status script executable.
-    chmod +x /usr/local/bin/decred.sh
-
-    # 10. Display Installation Summary
-    log_message "Installation complete."
-    printf "\n✅ Installation complete! Your Decred node is running.\n"
-    printf "   - To check the status: systemctl status dcrd\n"
-    printf "   - To monitor the log in real-time: decred.sh\n"
-    printf "   - To view logs: journalctl -u dcrd -f\n"
-    printf "   - Binaries installed: dcrd, dcrctl, dcrwallet\n\n"
+# Reading a system unit's journal requires root or membership in
+# systemd-journal (or adm on Debian/Ubuntu). Check up front so unprivileged
+# users get the helpful error below instead of an empty/denied stream.
+can_read_journal() {
+    [ "$(id -u)" -eq 0 ] && return 0
+    id -nG 2>/dev/null | tr ' ' '\n' | grep -qx -e systemd-journal -e adm
 }
 
-# --- Script Execution ---
-# Execute the main function only if the script was downloaded completely
+if command -v journalctl >/dev/null 2>&1 && can_read_journal; then
+    echo "Monitoring dcrd service logs (Ctrl-C to exit)..."
+    echo ""
+    exec journalctl -u dcrd -f --no-pager
+fi
+
+LOG_FILE="/var/lib/decred/logs/mainnet/dcrd.log"
+if [ -r "$LOG_FILE" ]; then
+    exec tail -f "$LOG_FILE"
+fi
+
+echo "Error: insufficient permissions to read dcrd logs. Try:" >&2
+echo "  sudo journalctl -u dcrd -f" >&2
+echo "  sudo tail -f $LOG_FILE" >&2
+exit 1
+EOF
+    chmod 0755 "${BIN_DIR}/decred.sh"
+}
+
+start_service() {
+    log_message "Enabling dcrd service..."
+    systemctl daemon-reload
+    systemctl enable dcrd.service
+
+    if systemctl is-active --quiet dcrd.service && [ "$NEEDS_RESTART" -eq 0 ]; then
+        log_message "dcrd is already running and nothing changed; leaving it untouched."
+        return 0
+    fi
+
+    log_message "(Re)starting dcrd service..."
+    # An immediate failure is surfaced by the poll below with journal context.
+    systemctl restart dcrd.service || true
+
+    # Poll for up to ~15s rather than guessing with a fixed sleep.
+    local _
+    for _ in $(seq 1 15); do
+        if systemctl is-active --quiet dcrd.service; then
+            log_message "dcrd service started successfully."
+            return 0
+        fi
+        systemctl is-failed --quiet dcrd.service && break
+        sleep 1
+    done
+
+    log_message "dcrd service failed to start; recent journal entries follow:"
+    journalctl -u dcrd.service -n 25 --no-pager 2>/dev/null | tee -a "$LOG_FILE" >&2 || true
+    die "dcrd service failed to start. Inspect with: journalctl -u dcrd -e"
+}
+
+print_summary() {
+    log_message "Installation complete."
+    cat <<SUMMARY
+
+✅ Installation complete! Your Decred node (${VERSION}) is running.
+   - Check status:        systemctl status dcrd
+   - Live monitor:        decred.sh
+   - View logs:           journalctl -u dcrd -f
+   - Installed binaries:  dcrd, dcrctl, dcrwallet
+
+SUMMARY
+}
+
+# --- Main ---
+main() {
+    require_root
+    require_systemd
+
+    umask 022
+    touch "$LOG_FILE"
+    chmod 644 "$LOG_FILE"
+    log_message "Starting Decred node setup..."
+
+    # Created up front: also used to stage the systemd unit on rerun paths.
+    TMP_DIR=$(mktemp -d)
+    log_message "Using temporary directory: $TMP_DIR"
+
+    check_disk_space
+    install_dependencies
+    detect_arch
+    resolve_version
+
+    if already_installed; then
+        log_message "dcrd ${VERSION} is already installed; ensuring service config. (DCR_FORCE=1 to reinstall.)"
+        setup_user_and_dirs
+        write_service
+        write_status_script
+        start_service
+        print_summary
+        return 0
+    fi
+
+    # Download and verify BEFORE stopping any running node, so a failed
+    # download or verification never leaves an existing node offline.
+    download_and_verify
+    stop_service_if_running
+    install_binaries
+    setup_user_and_dirs
+    write_service
+    write_status_script
+    start_service
+    print_summary
+}
+
 main "$@"
