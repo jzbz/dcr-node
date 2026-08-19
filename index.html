@@ -8,7 +8,7 @@
 #
 # Optional environment overrides:
 #   DCR_VERSION=v2.1.5        Pin a specific release instead of "latest"
-#   DCR_FORCE=1               Reinstall even if the latest version is already present
+#   DCR_SKIP_REINSTALL=1      Skip reinstalling when that version is already present
 #   DCR_SKIP_GPG=1            Skip GPG signature verification (NOT recommended)
 #   DCR_SKIP_SPACE_CHECK=1    Skip the free-disk-space preflight check
 #   GITHUB_TOKEN=...          Avoid GitHub API rate limits (60 req/hr unauthenticated)
@@ -21,7 +21,10 @@ readonly DCR_HOME="/var/lib/decred"
 readonly LOG_FILE="/var/log/decred_setup.log"
 readonly GH_REPO="decred/decred-binaries"
 readonly BIN_DIR="/usr/local/bin"
+# Total footprint the mainnet chain needs. Data already in $DCR_HOME counts
+# toward it, so a synced node only has to keep MIN_FREE_GB of headroom.
 readonly MIN_DISK_GB=20
+readonly MIN_FREE_GB=3
 # Decred Release signing key (primary key fingerprint). The full public key is
 # embedded below and re-verified against this fingerprint at runtime.
 readonly DCR_RELEASE_FPR="FD13B6835E248FAF4BD1838D6DF634AA7608AF04"
@@ -186,17 +189,45 @@ check_disk_space() {
         log_message "Skipping disk space check (DCR_SKIP_SPACE_CHECK=1)."
         return 0
     fi
-    local parent avail_gb
-    parent=$(dirname "$DCR_HOME")
-    avail_gb=$(df -Pk "$parent" 2>/dev/null | awk 'NR==2 {print int($4/1024/1024)}') || true
+    local target avail_gb chain_gb need_gb
+    # Measure the filesystem the chain actually lives on: $DCR_HOME once it
+    # exists (it may be its own mount), otherwise the parent it will go in.
+    if [ -d "$DCR_HOME" ]; then
+        target="$DCR_HOME"
+    else
+        target=$(dirname "$DCR_HOME")
+    fi
+    avail_gb=$(df -Pk "$target" 2>/dev/null | awk 'NR==2 {print int($4/1024/1024)}') || true
     if [ -z "${avail_gb:-}" ]; then
-        log_message "Warning: could not determine free space on ${parent}; continuing."
+        log_message "Warning: could not determine free space on ${target}; continuing."
         return 0
     fi
-    if [ "$avail_gb" -lt "$MIN_DISK_GB" ]; then
-        die "Only ${avail_gb} GB free on ${parent}. The mainnet chain needs ~${MIN_DISK_GB} GB and keeps growing. Free up space, or set DCR_SKIP_SPACE_CHECK=1 to proceed anyway."
+
+    # A chain that is already on disk has paid for most of the footprint: an
+    # existing node needs room to keep growing, not room for a second copy.
+    chain_gb=0
+    if [ -d "$DCR_HOME" ]; then
+        chain_gb=$(du -sxk "$DCR_HOME" 2>/dev/null | awk '{print int($1/1024/1024)}') || true
+        [ -n "${chain_gb:-}" ] || chain_gb=0
     fi
-    log_message "Disk space check passed (${avail_gb} GB free on ${parent})."
+
+    need_gb=$(( MIN_DISK_GB - chain_gb ))
+    if [ "$need_gb" -lt "$MIN_FREE_GB" ]; then
+        need_gb=$MIN_FREE_GB
+    fi
+
+    if [ "$avail_gb" -lt "$need_gb" ]; then
+        if [ "$chain_gb" -gt 0 ]; then
+            die "Only ${avail_gb} GB free on ${target}, and ${need_gb} GB is needed alongside the ${chain_gb} GB of chain data already there (mainnet needs ~${MIN_DISK_GB} GB total and keeps growing). Free up space, or set DCR_SKIP_SPACE_CHECK=1 to proceed anyway."
+        fi
+        die "Only ${avail_gb} GB free on ${target}. The mainnet chain needs ~${MIN_DISK_GB} GB and keeps growing. Free up space, or set DCR_SKIP_SPACE_CHECK=1 to proceed anyway."
+    fi
+
+    if [ "$chain_gb" -gt 0 ]; then
+        log_message "Disk space check passed (${avail_gb} GB free on ${target}, ${chain_gb} GB already used by existing chain data)."
+    else
+        log_message "Disk space check passed (${avail_gb} GB free on ${target})."
+    fi
 }
 
 # Map a required command to the package that provides it.
@@ -290,7 +321,6 @@ resolve_version() {
 
 # Returns 0 if the requested version is already installed.
 already_installed() {
-    [ "${DCR_FORCE:-0}" = "1" ] && return 1
     [ -x "${BIN_DIR}/dcrd" ] || return 1
     local current
     current=$("${BIN_DIR}/dcrd" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1) || true
@@ -601,14 +631,19 @@ main() {
     detect_arch
     resolve_version
 
+    # A rerun reinstalls by default, so the binaries on disk are always ones
+    # this run downloaded and verified against the signed manifest.
     if already_installed; then
-        log_message "dcrd ${VERSION} is already installed; ensuring service config. (DCR_FORCE=1 to reinstall.)"
-        setup_user_and_dirs
-        write_service
-        write_status_script
-        start_service
-        print_summary
-        return 0
+        if [ "${DCR_SKIP_REINSTALL:-0}" = "1" ]; then
+            log_message "dcrd ${VERSION} is already installed and DCR_SKIP_REINSTALL=1 is set; ensuring service config only."
+            setup_user_and_dirs
+            write_service
+            write_status_script
+            start_service
+            print_summary
+            return 0
+        fi
+        log_message "dcrd ${VERSION} is already installed; reinstalling it. (DCR_SKIP_REINSTALL=1 to keep the existing binaries.)"
     fi
 
     # Download and verify BEFORE stopping any running node, so a failed
